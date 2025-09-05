@@ -4,21 +4,20 @@ use ndarray::{Array, Array4, Axis};
 use std::fs;
 use std::time::Instant;
 
-// ===== Tract =====
+// ===== Imports for Tract =====
 use tract_onnx::prelude::Tensor as TractTensor;
 use tract_onnx::prelude::*;
 
-// ===== ONNX Runtime (ort) =====
+// ===== Import for ONNX Runtime (ort) =====
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor as OrtTensor;
 
-// ===== Burn (optional; requires generated files) =====
+// ===== Imports for Burn =====
 //use burn::backend::ndarray::NdArray;
 //use burn::tensor::Tensor as BurnTensor;
 
-// If you generated Burn code/weights for resnet50, keep this.
-// Otherwise, comment this block out.
+// The following should be created by build.rs
 mod generated {
     pub mod resnet50 {
         include!(concat!(env!("OUT_DIR"), "/burn_model/resnet50.rs"));
@@ -27,6 +26,7 @@ mod generated {
 use generated::resnet50 as resnet_model;
 
 // ----------------- Preprocessing -----------------
+// TODO: Does Burn have some of these image processing functions?
 fn resize_shorter_side_to(img: &image::DynamicImage, short: u32) -> image::DynamicImage {
     let (w, h) = img.dimensions();
     if w < h {
@@ -47,11 +47,10 @@ fn center_crop(img: &image::DynamicImage, crop_w: u32, crop_h: u32) -> image::Dy
     img.crop_imm(x, y, crop_w, crop_h)
 }
 
-/// ImageNet preprocessing to match your Python:
-/// - Resize shorter side to 256 (FilterType::Triangle - is it the same as bilinear?)
-/// - Center crop to 224x224
-/// - To RGB, to f32 in [0,1], normalize per channel
-/// - Shape: NCHW (1,3,224,224)
+// Resize shorter side to 256 (FilterType::Triangle - is it the same as bilinear?)
+// Center crop to 224x224
+// To RGB, to f32 in [0,1], normalise per channel
+// Shape: NCHW (1,3,224,224)
 fn preprocess_imagenet(path: &str) -> Result<Array4<f32>> {
     const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const STD:  [f32; 3] = [0.229, 0.224, 0.225];
@@ -67,7 +66,7 @@ fn preprocess_imagenet(path: &str) -> Result<Array4<f32>> {
     let resized = resize_shorter_side_to(&img_dyn, 256);
     let cropped = center_crop(&resized, 224, 224).to_rgb8();
 
-    // HWC -> CHW, f32, normalize
+    // HWC -> CHW, f32, normalise
     let (h, w) = (224usize, 224usize);
     let mut chw = Array::zeros((3, h, w));
     for y in 0..h {
@@ -89,6 +88,7 @@ fn preprocess_imagenet(path: &str) -> Result<Array4<f32>> {
 }
 
 // ----------------- Postprocessing -----------------
+// TODO: Does burn have a softmax?
 fn softmax(v: &[f32]) -> Vec<f32> {
     if v.is_empty() { return vec![]; }
     let max = v.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -151,7 +151,7 @@ fn run_burn_inference(input: &ndarray::Array4<f32>) -> anyhow::Result<Vec<f32>> 
         burn::tensor::Tensor::<B, 1>::from_floats(flat.as_slice(), &device)
             .reshape([1, 3, 224, 224]);
 
-    let weights_path = concat!(env!("OUT_DIR"), "/burn_model/resnet50.mpk");
+    let weights_path = concat!(env!("OUT_DIR"), "/burn_model/resnet50.mpk"); // This should be created by build.rs
     let model: resnet_model::Model<B> = resnet_model::Model::from_file(weights_path, &device);
 
     let y = model.forward(x);
@@ -166,8 +166,8 @@ fn run_burn_inference(input: &ndarray::Array4<f32>) -> anyhow::Result<Vec<f32>> 
 // ----------------- main -----------------
 fn main() -> Result<()> {
     // --- paths ---
-    let img_path = "src/cat.jpg";
-    let onnx_path = "src/resnet50.onnx";
+    let img_path = "src/cat.jpg"; // I downloaded this from google images
+    let onnx_path = "src/resnet50.onnx"; // This should be created by save_resnet50_onnx.py
 
     // --- labels ---
     let labels_txt = fs::read_to_string("imagenet_classes.txt")

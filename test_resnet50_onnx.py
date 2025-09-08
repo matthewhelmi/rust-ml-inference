@@ -1,47 +1,78 @@
+import argparse
 import time
 import onnxruntime
 import numpy as np
 from torchvision import transforms as T
-from onnx import numpy_helper
 from PIL import Image
+import os
 
-session_fp32 = onnxruntime.InferenceSession("src/resnet50.onnx", providers=['CPUExecutionProvider'])
-# session_fp32 = onnxruntime.InferenceSession("resnet50.onnx", providers=['CUDAExecutionProvider'])
-# session_fp32 = onnxruntime.InferenceSession("resnet50.onnx", providers=['OpenVINOExecutionProvider'])
-
-def softmax(x):
-    """Compute softmax values for each sets of scores in x."""
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum()
+def softmax(x: np.ndarray) -> np.ndarray:
+    x = x - np.max(x)
+    e_x = np.exp(x, dtype=np.float64)
+    return (e_x / e_x.sum()).astype(np.float32)
 
 latency = []
+
 def run_sample(session, image_file, categories, inputs):
+    # Get actual input name from the ONNX model
+    input_name = session.get_inputs()[0].name
+
     start = time.time()
     input_arr = inputs.cpu().detach().numpy()
-    ort_outputs = session.run([], {'input':input_arr})[0]
+    ort_outputs = session.run([], {input_name: input_arr})[0]
     latency.append(time.time() - start)
+
     output = ort_outputs.flatten()
-    output = softmax(output) # this is optional
+    output = softmax(output)  # optional but usually nice for readability
     top5_catid = np.argsort(-output)[:5]
     for catid in top5_catid:
-        print(categories[catid], output[catid])
+        print(categories[catid], float(output[catid]))
     return ort_outputs
 
-# Read the categories
-with open("imagenet_classes.txt", "r") as f:
-    categories = [s.strip() for s in f.readlines()]
+def main():
+    parser = argparse.ArgumentParser(description="Run ResNet50 ONNX with selectable precision.")
+    parser.add_argument("--precision", choices=["fp32", "fp16"], default="fp32",
+                        help="Inference precision & model variant to use.")
+    parser.add_argument("--image", default="src/cat.jpg", help="Path to input image.")
+    parser.add_argument("--classes", default="imagenet_classes.txt", help="Path to ImageNet classes file.")
+    parser.add_argument("--providers", nargs="*", default=["CPUExecutionProvider"],
+                        help="ONNX Runtime providers, e.g. CUDAExecutionProvider CPUExecutionProvider")
+    parser.add_argument("--model-fp32", default="src/resnet50.onnx",
+                        help="Path to FP32 model.")
+    parser.add_argument("--model-fp16", default="src/resnet50_fp16.onnx",
+                        help="Path to FP16 model.")
+    args = parser.parse_args()
 
-filename = 'src/cat.jpg' # change to your filename
+    # Pick model path based on precision
+    model_path = args.model_fp16 if args.precision == "fp16" else args.model_fp32
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model not found at: {model_path}")
 
-input_image = Image.open(filename)
-preprocess = T.Compose([
-    T.Resize(256),
-    T.CenterCrop(224),
-    T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-input_tensor = preprocess(input_image)
-input_batch = input_tensor.unsqueeze(0) # create a mini-batch as expected by the model
+    # Create session
+    session = onnxruntime.InferenceSession(model_path, providers=args.providers)
 
-ort_output = run_sample(session_fp32, 'src/cat.jpg', categories, input_batch)
-print("ONNX Runtime Inference time = {} ms".format(format(sum(latency) * 1000 / len(latency), '.2f')))
+    # Read categories
+    with open(args.classes, "r") as f:
+        categories = [s.strip() for s in f.readlines()]
+
+    # Load & preprocess image
+    input_image = Image.open(args.image).convert("RGB")
+    preprocess = T.Compose([
+        T.Resize(256),
+        T.CenterCrop(224),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    input_tensor = preprocess(input_image)
+    # Cast to chosen precision
+    if args.precision == "fp16":
+        input_batch = input_tensor.unsqueeze(0).half()
+    else:
+        input_batch = input_tensor.unsqueeze(0).float()
+
+    # Run inference
+    ort_output = run_sample(session, args.image, categories, input_batch)
+    print("ONNX Runtime Inference time = {} ms".format(format(sum(latency) * 1000 / len(latency), '.2f')))
+
+if __name__ == "__main__":
+    main()

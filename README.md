@@ -49,7 +49,7 @@ Overall we are aiming to achieve a reduced model size to optimise storage and re
 | ------------- | ------------- | ------------- | ------------- |
 | 97  | 49  | 25  | 25  |
 
-Inference times become hardware dependent.
+Inference times become hardware dependent, but one aim could be to achieve as close to the same output as possible.
 
 Example Output from test_resnet50_onnx.py:
 ```burn

@@ -81,10 +81,10 @@ $ cargo build
 $ cargo run --release
 ```
 
+Example Output:
 ```burn
 (rust-resnet50-inference) $ cargo run --release 
 
-Example Output:
 [Tract] inference: 298.522ms
 Tract top-5:
  281: tabby                                                         0.6464

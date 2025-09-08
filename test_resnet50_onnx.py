@@ -17,8 +17,11 @@ def run_sample(session, image_file, categories, inputs):
     # Get actual input name from the ONNX model
     input_name = session.get_inputs()[0].name
 
-    start = time.time()
+    # Warm up
     input_arr = inputs.cpu().detach().numpy()
+    ort_outputs = session.run([], {input_name: input_arr})[0]
+
+    start = time.time()
     ort_outputs = session.run([], {input_name: input_arr})[0]
     latency.append(time.time() - start)
 
@@ -31,7 +34,7 @@ def run_sample(session, image_file, categories, inputs):
 
 def main():
     parser = argparse.ArgumentParser(description="Run ResNet50 ONNX with selectable precision.")
-    parser.add_argument("--precision", choices=["fp32", "fp16"], default="fp32",
+    parser.add_argument("--precision", choices=["fp32", "fp16", "dyn-quant", "stat-quant"], default="fp32",
                         help="Inference precision & model variant to use.")
     parser.add_argument("--image", default="src/cat.jpg", help="Path to input image.")
     parser.add_argument("--classes", default="imagenet_classes.txt", help="Path to ImageNet classes file.")
@@ -41,10 +44,21 @@ def main():
                         help="Path to FP32 model.")
     parser.add_argument("--model-fp16", default="src/resnet50_fp16.onnx",
                         help="Path to FP16 model.")
+    parser.add_argument("--model-dyn", default="src/resnet50_dynamic.onnx",
+                        help="Path to Dynamic Quantised model.")
+    parser.add_argument("--model-stat", default="src/resnet50_stat.quant.onnx",
+                        help="Path to Static Quantised model.")
     args = parser.parse_args()
 
     # Pick model path based on precision
-    model_path = args.model_fp16 if args.precision == "fp16" else args.model_fp32
+    if args.precision == "fp16":
+        model_path = args.model_fp16
+    elif args.precision == "fp32":
+        model_path = args.model_fp32
+    elif args.precision == "dyn-quant":
+        model_path = args.model_dyn
+    elif args.precision == "stat-quant":
+        model_path = args.model_stat
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found at: {model_path}")
 

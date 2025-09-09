@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use image::{self, GenericImageView, imageops::FilterType};
 use ndarray::{Array, Array4, Axis};
 use std::fs;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // ===== Imports for Tract =====
 use tract_onnx::prelude::Tensor as TractTensor;
@@ -105,7 +105,7 @@ fn topk_indices(values: &[f32], k: usize) -> Vec<usize> {
 }
 
 // ----------------- Inference: Tract -----------------
-fn run_tract_inference(model_path: &str, input: &Array4<f32>) -> Result<Vec<f32>> {
+fn run_tract_inference(model_path: &str, input: &Array4<f32>) -> Result<(Vec<f32>, Duration)> {
     let model = tract_onnx::onnx()
         .model_for_path(model_path)?
         .with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), tvec!(1, 3, 224, 224)))?
@@ -113,19 +113,27 @@ fn run_tract_inference(model_path: &str, input: &Array4<f32>) -> Result<Vec<f32>
         .into_runnable()?;
 
     let data: Vec<f32> = input.iter().copied().collect();
+
+    // --- Warmup (not timed) ---
+    let warmup_tensor = TractTensor::from_shape(&[1, 3, 224, 224], &data)?;
+    let _ = model.run(tvec!(warmup_tensor.into()))?;
+    
+    // --- Real inference
     let input_tensor = TractTensor::from_shape(&[1, 3, 224, 224], &data)?;
+    let t0 = Instant::now();
     let result = model.run(tvec!(input_tensor.into()))?;
+    let elapsed = t0.elapsed();
 
     let output: Vec<f32> = result[0]
         .to_array_view::<f32>()?
         .iter()
         .copied()
         .collect();
-    Ok(output)
+    Ok( (output, elapsed) )
 }
 
 // ----------------- Inference: ONNX Runtime (ORT) -----------------
-fn run_ort_inference(model_path: &str, input: &Array4<f32>) -> Result<Vec<f32>> {
+fn run_ort_inference(model_path: &str, input: &Array4<f32>) -> Result<(Vec<f32>, Duration)> {
     // ORT session must be mutable for .run()
     let mut session: Session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
@@ -134,15 +142,22 @@ fn run_ort_inference(model_path: &str, input: &Array4<f32>) -> Result<Vec<f32>> 
 
     let data: Vec<f32> = input.iter().copied().collect();
     let shape = [1i64, 3, 224, 224];
+    
+    // --- Warmup (not timed) ---
+    let warmup_tensor: OrtTensor<f32> = OrtTensor::from_array((shape, data.clone()))?;
+    let _ = session.run(ort::inputs![warmup_tensor])?;
+    
+    // --- Real inference
     let input_tensor: OrtTensor<f32> = OrtTensor::from_array((shape, data))?;
-
+    let t0 = Instant::now();
     let outputs = session.run(ort::inputs![input_tensor])?;
+    let elapsed = t0.elapsed();
     let out_view = outputs[0].try_extract_array::<f32>()?;
-    Ok(out_view.iter().copied().collect())
+    Ok( (out_view.iter().copied().collect(), elapsed) )
 }
 
 // ----------------- Inference: Burn -----------------
-fn run_burn_inference(input: &ndarray::Array4<f32>) -> anyhow::Result<Vec<f32>> {
+fn run_burn_inference(input: &ndarray::Array4<f32>) -> anyhow::Result<(Vec<f32>, Duration)> {
     type B = burn::backend::ndarray::NdArray<f32>;
     let device = <B as burn::tensor::backend::Backend>::Device::default();
 
@@ -154,13 +169,19 @@ fn run_burn_inference(input: &ndarray::Array4<f32>) -> anyhow::Result<Vec<f32>> 
     let weights_path = concat!(env!("OUT_DIR"), "/burn_model/resnet50.mpk"); // This should be created by build.rs
     let model: resnet_model::Model<B> = resnet_model::Model::from_file(weights_path, &device);
 
+    // --- Warmup (not timed) ---
+    let _ = model.forward(x.clone());
+    
+    // --- Real inference
+    let t0 = Instant::now();
     let y = model.forward(x);
+    let elapsed = t0.elapsed();
     let data = y.into_data();
     let output: Vec<f32> = data
         .convert::<f32>()
         .to_vec::<f32>()
         .map_err(|e| anyhow::anyhow!("Burn tensor to_vec failed: {e:?}"))?;
-    Ok(output)
+    Ok( (output, elapsed) )
 }
 
 // ----------------- main -----------------
@@ -178,39 +199,36 @@ fn main() -> Result<()> {
     let input = preprocess_imagenet(img_path)?;
 
     // --- Tract ---
-    let t0 = Instant::now();
-    let logits_tract = run_tract_inference(onnx_path, &input)?;
-    println!("\n[Tract] inference: {:.3?}", t0.elapsed());
+    let (logits_tract, latency) = run_tract_inference(onnx_path, &input)?;
+    println!("\n[Tract] inference: {:.3?}", latency);
     let probs_tract = softmax(&logits_tract);
     let top5_t = topk_indices(&probs_tract, 5);
     println!("Tract top-5:");
     for i in top5_t {
         let label = labels.get(i).map(String::as_str).unwrap_or("<unknown>");
-        println!("{:>4}: {:<60}  {:.4}", i, label, probs_tract[i]);
+        println!("{:>4}: {:<60}  {:.15}", i, label, probs_tract[i]);
     }
 
     // --- ORT ---
-    let t0 = Instant::now();
-    let logits_ort = run_ort_inference(onnx_path, &input)?;
-    println!("\n[ORT] inference: {:.3?}", t0.elapsed());
+    let (logits_ort, latency) = run_ort_inference(onnx_path, &input)?;
+    println!("\n[ORT] inference: {:.3?}", latency);
     let probs_ort = softmax(&logits_ort);
     let top5_o = topk_indices(&probs_ort, 5);
     println!("ORT top-5:");
     for i in top5_o {
         let label = labels.get(i).map(String::as_str).unwrap_or("<unknown>");
-        println!("{:>4}: {:<60}  {:.4}", i, label, probs_ort[i]);
+        println!("{:>4}: {:<60}  {:.15}", i, label, probs_ort[i]);
     }
 
     // --- Burn ---
-    let t0 = Instant::now();
-    let burn_output = run_burn_inference(&input)?;
-    println!("\n[Burn] inference: {:.3?}", t0.elapsed());
+    let (burn_output, latency) = run_burn_inference(&input)?;
+    println!("\n[Burn] inference: {:.3?}", latency);
     let probs_burn = softmax(&burn_output);
     let top5_b = topk_indices(&probs_burn, 5);
     println!("Burn top-5:");
     for i in top5_b {
         let label = labels.get(i).map(String::as_str).unwrap_or("<unknown>");
-        println!("{:>4}: {:<60}  {:.4}", i, label, probs_burn[i]);
+        println!("{:>4}: {:<60}  {:.15}", i, label, probs_burn[i]);
     }
 
     Ok(())

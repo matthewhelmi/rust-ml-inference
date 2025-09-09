@@ -85,27 +85,27 @@ Example Output:
 ```burn
 (rust-resnet50-inference) $ cargo run --release 
 
-[Tract] inference: 298.522ms
+[Tract] inference: 77.498ms
 Tract top-5:
- 281: tabby                                                         0.6464
- 285: Egyptian cat                                                  0.2831
- 282: tiger cat                                                     0.0646
- 287: lynx                                                          0.0025
- 292: tiger                                                         0.0008
+ 281: tabby                                                         0.646413087844849
+ 285: Egyptian cat                                                  0.283075898885727
+ 282: tiger cat                                                     0.064562723040581
+ 287: lynx                                                          0.002496621105820
+ 292: tiger                                                         0.000847838236950
 
-[ORT] inference: 145.104ms
+[ORT] inference: 92.931ms
 ORT top-5:
- 281: tabby                                                         0.6464
- 285: Egyptian cat                                                  0.2831
- 282: tiger cat                                                     0.0646
- 287: lynx                                                          0.0025
- 292: tiger                                                         0.0008
+ 281: tabby                                                         0.646412014961243
+ 285: Egyptian cat                                                  0.283076524734497
+ 282: tiger cat                                                     0.064563050866127
+ 287: lynx                                                          0.002496657660231
+ 292: tiger                                                         0.000847849820275
 
-[Burn] inference: 308.928ms
+[Burn] inference: 272.457ms
 Burn top-5:
- 281: tabby                                                         0.6464
- 285: Egyptian cat                                                  0.2831
- 282: tiger cat                                                     0.0646
- 287: lynx                                                          0.0025
- 292: tiger                                                         0.0008
+ 281: tabby                                                         0.646412312984467
+ 285: Egyptian cat                                                  0.283076375722885
+ 282: tiger cat                                                     0.064562954008579
+ 287: lynx                                                          0.002496658591554
+ 292: tiger                                                         0.000847853370942
 ```
